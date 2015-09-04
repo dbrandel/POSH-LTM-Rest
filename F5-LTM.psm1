@@ -1,19 +1,16 @@
 <#
-AUTHOR: Joel Newton
-CREATED DATE: 5/13/15
-LAST UPDATED DATE: 6/8/15
-
-SYNOPSIS
-
-This module uses the F5 LTM REST API to manipulate and query pools and pool members
-It is built to work with version 11.6
-	    
-DEPENDENCIES
-
-It depends on the TunableSSLValidator module authored by Jaykul (https://github.com/Jaykul/Tunable-SSL-Validator) to allow for using the REST API 
-with LTM devices using self-signed SSL certificates. If you are not connecting to your LTM(s) via SSL or you're using a trusted 
-certificate, then the TunableSSLValidator module is not needed and you can remove the -Insecure parameter from the Invoke-WebRequest calls
-
+.SYNOPSIS  
+    A module for using the F5 LTM REST API to administer an LTM device
+.DESCRIPTION  
+    This module uses the F5 LTM REST API to manipulate and query pools, pool members, virtual servers and iRules
+    It is built to work with version 11.6
+.NOTES  
+    File Name    : F5-LTM.psm1
+    Author       : Joel Newton - joel74@gmail.com  
+    Requires     : PowerShell V3
+    Dependencies : It depends on the TunableSSLValidator module authored by Jaykul (https://github.com/Jaykul/Tunable-SSL-Validator) to allow for using the REST API 
+    with LTM devices using self-signed SSL certificates. If you are not connecting to your LTM(s) via SSL or you're using a trusted 
+    certificate, then the TunableSSLValidator module is not needed and you can remove the -Insecure parameter from the Invoke-RestMethod calls
 #>
 
 Function Get-F5session{
@@ -46,12 +43,10 @@ Function Get-F5Status{
 
     $FailoverPage = $F5Session.BaseURL -replace "/ltm/", "/cm/failover-status"
 
-    $FailoverJSON = Invoke-WebRequest -Insecure -Uri $FailoverPage -Credential $F5Session.Credential
-
-    $FailOver = $FailoverJSON.Content | ConvertFrom-Json
+    $FailoverJSON = Invoke-RestMethod -Method Get -Insecure -Uri $FailoverPage -Credential $F5Session.Credential
 
     #This is where the failover status is indicated
-    $FailOverStatus = $failover.entries.'https://localhost/mgmt/tm/cm/failover-status/0'.nestedStats.entries.status.description
+    $FailOverStatus = $FailoverJSON.entries.'https://localhost/mgmt/tm/cm/failover-status/0'.nestedStats.entries.status.description
 
     #Return the failover status value
     $FailOverStatus
@@ -69,9 +64,7 @@ Function Get-VirtualServerList{
     #Only retrieve the pool names
     $VirtualServersPage = $F5session.BaseURL + 'virtual?$select=name'
 
-    $VirtualServersJSON = Invoke-WebRequest -Insecure -Uri $VirtualServersPage -Credential $F5session.Credential
-
-    $VirtualServers = $VirtualServersJSON.Content | ConvertFrom-Json
+    $VirtualServers = Invoke-RestMethod -Method Get -Insecure -Uri $VirtualServersPage -Credential $F5Session.Credential
 
     $VirtualServers.items.name
 
@@ -92,11 +85,10 @@ Function Get-VirtualServer{
     #Build the URI for this virtual server
     $URI = $F5session.BaseURL + "virtual/$VirtualServerName"
 
-    $VirtualServerJSON = Invoke-WebRequest -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
+    $VirtualServerJSON = Invoke-RestMethod -Method Get -Insecure -Uri $URI -Credential $F5Session.Credential -ErrorAction SilentlyContinue
 
     If ($VirtualServerJSON){
-        $VirtualServer = $VirtualServerJSON.Content | ConvertFrom-Json
-        $VirtualServer
+        $VirtualServerJSON
     }
     Else {
 
@@ -119,13 +111,13 @@ Function Test-VirtualServer {
     #Build the URI for this virtual server
     $URI = $F5session.BaseURL + "virtual/$VirtualServerName"
 
-    $VirtualServerJSON = Invoke-WebRequest -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
+    $VirtualServerJSON = Invoke-RestMethod -Method Get -Insecure -Uri $URI -Credential $F5Session.Credential -ErrorAction SilentlyContinue
 
     If ($VirtualServerJSON){
-        $true
+        Return($true)
     }
     Else {
-        $false
+        Return($false)
     }
 
 }
@@ -175,8 +167,16 @@ Function New-VirtualServer{
 
         Write-Verbose $JSONBody
 
-        $response = Invoke-WebRequest -Insecure -Method POST -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+        Try{
+            $response = Invoke-RestMethod -Method POST -Insecure -Uri "$URI" -Credential $F5Session.Credential -Body $JSONBody -ContentType 'application/json'
+        }
+        Catch {
+            Write-Error "Failed to create the virtual server $VirtualServerName.`r`nThe error returned was $error[0]"
+            Return($false)
+        }
 
+        #Successfully created virtual server
+        $response
     }
 }
 
@@ -210,14 +210,16 @@ Remove the specified virtual server. Confirmation is needed. NB: Virtual server 
 
         Else {
   
-            $response = Invoke-WebRequest -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -Headers @{"Content-Type"="application/json"}
+            Try {
+                $response = Invoke-RestMethod -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -ContentType 'application/json'
+            }
+            Catch {
+                Write-Error "Failed to remove the $VirtualServerName virtual server. The error returned was:`r`n$Error[0]"
+                Return($false)
+            }
 
-            If ($response.statusCode -eq "200"){
-                $true;
-            }
-            Else {
-                ("$($response.StatusCode): $($response.StatusDescription)")
-            }
+            #Success - return TRUE
+            Return($true)
 
         }
     }
@@ -235,11 +237,9 @@ Function Get-PoolList{
     #Only retrieve the pool names
     $PoolsPage = $F5session.BaseURL + 'pool/?$select=name'
 
-    $PoolsJSON = Invoke-WebRequest -Insecure -Uri $PoolsPage -Credential $F5session.Credential
+    $PoolsJSON = Invoke-RestMethod -Method Get -Insecure -Uri $PoolsPage -Credential $F5session.Credential
 
-    $Pools = $PoolsJSON.Content | ConvertFrom-Json
-
-    $Pools.items.name
+    $PoolsJSON.items.name
 
 }
 
@@ -257,11 +257,10 @@ Function Get-Pool {
     #Build the URI for this pool
     $URI = $F5session.BaseURL + "pool/$PoolName"
 
-    $PoolJSON = Invoke-WebRequest -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
+    $PoolJSON = Invoke-RestMethod -Method Get -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
 
     If ($PoolJSON){
-        $Pool = $PoolJSON.Content | ConvertFrom-Json
-        $Pool
+        $PoolJSON
     }
     Else {
 
@@ -285,7 +284,7 @@ Function Test-Pool {
     #Build the URI for this pool
     $URI = $F5session.BaseURL + "pool/$PoolName"
 
-    $PoolJSON = Invoke-WebRequest -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
+    $PoolJSON = Invoke-RestMethod -Method Get -Insecure -Uri $URI -Credential $F5session.Credential -ErrorAction SilentlyContinue
 
     If ($PoolJSON){
         $true
@@ -365,7 +364,7 @@ Optionally, it can contain a description of the member.
         $JSONBody.members = $Members
         $JSONBody = $JSONBody | ConvertTo-Json
 
-        $response = Invoke-WebRequest -Insecure -Method POST -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+        $response = Invoke-RestMethod -Insecure -Method POST -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -ContentType 'application/json'
 
     }
 
@@ -384,8 +383,6 @@ Function Remove-Pool{
         
     )
 
-    Write-Verbose "NB: Pool names are case-specific."
-
     #Build the URI for this pool
     $URI = $F5session.BaseURL + "pool/$PoolName"
 
@@ -393,20 +390,21 @@ Function Remove-Pool{
 
         #Check whether the specified pool already exists
         If (!(Test-Pool -F5session $F5session -PoolName $PoolName)){
-            Write-Error "The $PoolName pool does not exist."
+            Write-Error "The $PoolName pool does not exist.`r`nNB: Pool names are case-specific."
         }
 
         Else {
   
-            $response = Invoke-WebRequest -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -Headers @{"Content-Type"="application/json"}
-
-            If ($response.statusCode -eq "200"){
-                $true;
+            Try {
+                $response = Invoke-RestMethod -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -ContentType 'application/json'
             }
-            Else {
-                ("$($response.StatusCode): $($response.StatusDescription)")
+            Catch {
+                Write-Error "Failed to remove the $PoolName pool. The error returned was:`r`n$Error[0]"
+                Return($false)
             }
 
+            #Success - return TRUE
+            Return($true)
         }
     }
 
@@ -423,11 +421,9 @@ Function Get-PoolMemberCollection {
 
     $PoolMembersPage = $F5session.BaseURL + "pool/~Common~$PoolName/members/?"
 
-    $PoolMembersJSON = Invoke-WebRequest -Insecure -Uri $PoolMembersPage -Credential $F5session.Credential
+    $PoolMembersJSON = Invoke-RestMethod -Method Get -Insecure -Uri $PoolMembersPage -Credential $F5session.Credential
 
-    $PoolMembers = $PoolMembersJSON.Content | ConvertFrom-Json
-
-    $PoolMembers.items
+    $PoolMembersJSON.items
 
 }
 
@@ -439,7 +435,7 @@ Function Get-AllPoolMembersStatus {
         [Parameter(Mandatory=$true)]$F5session
     )
 
-    $PoolMembers = Get-PoolMembers -PoolName $PoolName -F5session $F5session | Select-Object -Property name,session,state
+    $PoolMembers = Get-PoolMemberCollection -PoolName $PoolName -F5session $F5session | Select-Object -Property name,session,state
 
     $PoolMembers
 }
@@ -460,13 +456,13 @@ Function Get-PoolMember {
  
     $PoolMember = ForEach ($Pool in $MemberInPools){
 
-        $IPAddress = Get-PoolMemberIP -ComputerName $ComputerName -PoolName $Pool
+        $IPAddress = Get-PoolMemberIP -ComputerName $ComputerName -PoolName $Pool -F5Session $F5session
 
         $PoolMemberURI = $F5session.BaseURL + "pool/~Common~$Pool/members/~Common~$IPAddress`?"
 
-        $PoolMemberJSON = Invoke-WebRequest -Insecure -Uri $PoolMemberURI -Credential $F5session.Credential
+        $PoolMemberJSON = Invoke-RestMethod -Method Get -Insecure -Uri $PoolMemberURI -Credential $F5session.Credential
 
-        $PoolMemberJSON.Content | ConvertFrom-Json
+        $PoolMemberJSON
 
     }
 
@@ -479,21 +475,45 @@ Function Set-PoolMemberDescription {
 # Set the description value for the specified pool member
     param(
 
-        $ComputerName,
-        $PoolName,
-        $F5Session,
-        $Description
+        [Parameter(Mandatory=$true)]$ComputerName,
+        [Parameter(Mandatory=$true)]$PoolName,
+        [Parameter(Mandatory=$true)]$F5Session,
+        [Parameter(Mandatory=$true)]$Description
     )
 
-    $IPAddress = Get-PoolMemberIP -ComputerName $ComputerName -PoolName $PoolName
+    $IPAddress = Get-PoolMemberIP -ComputerName $ComputerName -PoolName $PoolName -F5Session $F5session
 
     $URI = $F5session.BaseURL + "pool/~Common~$PoolName/members/$IPAddress"
 
     $JSONBody = @{description=$Description} | ConvertTo-Json
 
-    $response = Invoke-WebRequest -Insecure -Method PUT -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+    Try {
+        $response = Invoke-RestMethod -Insecure -Method PUT -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -ContentType 'application/json'
+    }
+    Catch {
+        Write-Error "Failed to set the description on $ComputerName in the $PoolName pool to $Description. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
 
+    #Successfully set the description
+    Return($true)
+}
 
+Function Get-PoolMemberDescription {
+#Get the current session and state values for the specified computer
+
+   param(
+        [Parameter(Mandatory=$true)]$ComputerName,
+        [Parameter(Mandatory=$true)]$PoolName,
+        [Parameter(Mandatory=$true)]$F5Session
+
+    )
+
+    $PoolMember = Get-PoolMember -ComputerName $ComputerName -F5session $F5session
+
+    $PoolMember = $PoolMember | Select-Object -Property name,description
+
+    $PoolMember.description
 }
 
 
@@ -531,7 +551,7 @@ Function Get-PoolsForMember {
 
     foreach($Pool in $AllPools) 
     {
-        $PoolMembers = Get-PoolMembers -PoolName $Pool -F5session $F5session
+        $PoolMembers = Get-PoolMemberCollection -PoolName $Pool -F5session $F5session
 
         foreach($PoolMember in $PoolMembers) {
 
@@ -551,20 +571,37 @@ Function Get-PoolMemberIP {
 
     param(
         [Parameter(Mandatory=$true)]$ComputerName,
-        [Parameter(Mandatory=$true)]$PoolName
+        [Parameter(Mandatory=$true)]$PoolName,
+        [Parameter(Mandatory=$true)]$F5Session
     )
 
 
-    $IPAddress = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration | Where DefaultIPGateway | select -exp IPaddress | select -first 1
+    $IPAddress = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | Where DefaultIPGateway | select -exp IPaddress | select -first 1
+    #If we don't get an IP address for the computer, then fail
+    If (!($IPAddress)){
+        Write-Error "Failed to obtain IP address for $ComputerName. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
 
-    $Port = $PoolName -replace ".*_",""
+    #Check the members of the specified pool to see if there is a member that matches this computer's IP address
+    $PoolMembers = Get-PoolMemberCollection -PoolName $PoolName -F5session $F5Session     
+    $MemberName = $false
+    foreach($PoolMember in $PoolMembers) {
 
-    If ($IPAddress -eq $null){
-        throw ("This server $ComputerName was not found, or its NIC(s) don't have a default gateway.")
+        if($PoolMember.address -eq $IPAddress) {
+            $MemberName = $PoolMember.Name
+        }
+    }
+
+    If ($MemberName){
+        Return($MemberName)
     }
     Else {
-        ($IPAddress+":"+$Port)
+        Write-Error "This computer was not found in the specified pool."
+        Return($false)
     }
+
+
 }
 
 
@@ -573,25 +610,34 @@ Function Add-PoolMember{
 #Add a computer to a pool as a member
     param(
         [Parameter(Mandatory=$true)]$ComputerName,
+        [Parameter(Mandatory=$true)]$PortNumber,
         [Parameter(Mandatory=$true)]$PoolName,
         [Parameter(Mandatory=$true)]$F5session
     )
 
     $URI = $F5session.BaseURL + "pool/~Common~$PoolName/members"
 
-    $IPAddress = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration | Where DefaultIPGateway | select -exp IPaddress | select -first 1
-    $MemberName = $IPAddress + ":" + ($PoolName -replace ".*_","")
+    $IPAddress = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | Where DefaultIPGateway | select -exp IPaddress | select -first 1
+    #If we don't get an IP address for the computer, then fail
+    If (!($IPAddress)){
+        Write-Error "Failed to obtain IP address for $ComputerName. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
+
+    $MemberName = $IPAddress + ":" + $PortNumber
 
     $JSONBody = @{name=$MemberName;address=$IPAddress;description=$ComputerName} | ConvertTo-Json
 
-    $response = Invoke-WebRequest -Insecure -Method POST -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+    Try {
+        $response = Invoke-RestMethod -Insecure -Method POST -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody -ContentType 'application/json' -ErrorAction SilentlyContinue
+    }
+    Catch {
+        Write-Error "Failed to add $ComputerName to $PoolName. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
 
-    If ($response.statusCode -eq "200"){
-        $true;
-    }
-    Else {
-        ("$($response.StatusCode): $($response.StatusDescription)")
-    }
+    #Success - return pool member
+    Return($response)
 }
 
 
@@ -599,23 +645,32 @@ Function Remove-PoolMember{
 #Remove a computer from a pool
     param(
         [Parameter(Mandatory=$true)]$ComputerName,
+        [Parameter(Mandatory=$true)]$PortNumber,
         [Parameter(Mandatory=$true)]$PoolName,
         [Parameter(Mandatory=$true)]$F5session
     )
 
-    $ComputerIP = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration | Where DefaultIPGateway | select -exp IPaddress | select -first 1
-    $MemberName = $ComputerIP + ":" + ($PoolName -replace ".*_","")
+    $IPAddress = Get-WmiObject -ComputerName $ComputerName -Class Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | Where DefaultIPGateway | select -exp IPaddress | select -first 1
+    #If we don't get an IP address for the computer, then fail
+    If (!($IPAddress)){
+        Write-Error "Failed to obtain IP address for $ComputerName. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
+    
+    $MemberName = $IPAddress + ":" + $PortNumber
 
     $URI = $F5session.BaseURL + "pool/~Common~$PoolName/members/~Common~$MemberName"
     
-    $response = Invoke-WebRequest -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -Headers @{"Content-Type"="application/json"}
+    Try {
+        $response = Invoke-RestMethod -Insecure -Method DELETE -Uri "$URI" -Credential $F5session.Credential -ContentType 'application/json' -ErrorAction SilentlyContinue
+    }
+    Catch {
+        Write-Error "Failed to remove $ComputerName from $PoolName. The error returned was:`r`n$Error[0]"
+        Return($false)
+    }
 
-    If ($response.statusCode -eq "200"){
-        $true;
-    }
-    Else {
-        ("$($response.StatusCode): $($response.StatusDescription)")
-    }
+    #Return true for success
+    Return($true)
 }
 
 
@@ -647,7 +702,7 @@ Function Disable-PoolMember{
     ForEach ($Pool in $Pools){
     
         $URI = $F5session.BaseURL + "pool/~Common~$Pool/members/$IPAddress"
-        $response = Invoke-WebRequest -Insecure -Method Put -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody
+        $response = Invoke-RestMethod -Insecure -Method Put -Uri "$URI" -Credential $F5session.Credential -Body $JSONBody
 
     }
     
@@ -667,7 +722,7 @@ Function Enable-PoolMember {
     ForEach ($Pool in $Pools){
 
         $URI = $F5session.BaseURL + "pool/~Common~$Pool/members/$IPAddress"
-        $response = Invoke-WebRequest -Insecure -Method Put -Uri "$URI" -Credential $F5session.Credential -Body '{"state": "user-up", "session": "user-enabled"}'
+        $response = Invoke-RestMethod -Insecure -Method Put -Uri "$URI" -Credential $F5session.Credential -Body '{"state": "user-up", "session": "user-enabled"}'
 
     }
 
@@ -688,12 +743,10 @@ Function Get-CurrentConnectionCount {
     $PoolMember = $F5session.BaseURL + "pool/~Common~$PoolName/members/~Common~$IPAddress/stats"
 
 
-    $PoolMemberJSON = Invoke-WebRequest -Insecure -Uri $PoolMember -Credential $F5session.Credential
-
-    $PoolMember = $PoolMemberJSON.Content | ConvertFrom-Json
+    $PoolMemberJSON = Invoke-RestMethod -Method Get -Insecure -Uri $PoolMember -Credential $F5session.Credential
 
     #Return the number of current connections for this member of this pool
-    $PoolMember.entries.'serverside.curConns'.value
+    $PoolMemberJSON.entries.'serverside.curConns'.value
 
 }
 
@@ -742,12 +795,10 @@ Function Get-VirtualServeriRuleCollection {
 
     $VirtualServerURI = $F5session.BaseURL + "virtual/~Common~$VirtualServer/"
 
-    $VirtualserverObject = Invoke-WebRequest -Insecure -Uri $VirtualServerURI -Credential $F5session.Credential
-
-    $VirtualserverObjectContent = $VirtualserverObject.Content | ConvertFrom-Json
+    $VirtualserverObject = Invoke-RestMethod -Method Get -Insecure -Uri $VirtualServerURI -Credential $F5session.Credential
 
     #Filter the content for just the iRules
-    $VirtualserverObjectContent = $VirtualserverObjectContent | Select-Object -Property rules
+    $VirtualserverObjectContent = $VirtualserverObject | Select-Object -Property rules
 
     $iRules = $VirtualserverObjectContent.rules
 
@@ -795,7 +846,7 @@ Function Add-iRuleToVirtualServer {
 
         $JSONBody = @{rules=$iRules} | ConvertTo-Json
 
-        $response = Invoke-WebRequest -Insecure -Method PUT -Uri "$VirtualserverIRules" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+        $response = Invoke-RestMethod -Insecure -Method PUT -Uri "$VirtualserverIRules" -Credential $F5session.Credential -Body $JSONBody -ContentType 'application/json'
 
         Return($true)
 
@@ -816,7 +867,7 @@ Function Remove-iRuleFromVirtualServer {
     $iRuleToRemove = "/Common/$iRule"
 
     #Get the existing IRules on the virtual server
-    [array]$iRules = Get-VirtualServerIRules -VirtualServer $VirtualServer -F5session $F5session
+    [array]$iRules = Get-VirtualServeriRuleCollection -VirtualServer $VirtualServer -F5session $F5session
 
     #If there are no iRules on this virtual server, then create a new array
     If (!$iRules){
@@ -832,7 +883,7 @@ Function Remove-iRuleFromVirtualServer {
 
         $JSONBody = @{rules=$iRules} | ConvertTo-Json
 
-        $response = Invoke-WebRequest -Insecure -Method PUT -Uri "$VirtualserverIRules" -Credential $F5session.Credential -Body $JSONBody -Headers @{"Content-Type"="application/json"}
+        $response = Invoke-RestMethod -Insecure -Method PUT -Uri "$VirtualserverIRules" -Credential $F5session.Credential -Body $JSONBody -ContentType 'application/json'
 
         Return($true)
 
@@ -845,4 +896,3 @@ Function Remove-iRuleFromVirtualServer {
     }
 
 }
-
